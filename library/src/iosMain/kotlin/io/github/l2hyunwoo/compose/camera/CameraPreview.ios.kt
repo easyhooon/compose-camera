@@ -11,9 +11,7 @@ import androidx.compose.ui.interop.UIKitView
 import kotlinx.cinterop.ExperimentalForeignApi
 import platform.AVFoundation.AVCaptureVideoPreviewLayer
 import platform.AVFoundation.AVLayerVideoGravityResizeAspectFill
-import platform.QuartzCore.CALayer
 import platform.QuartzCore.CATransaction
-import platform.QuartzCore.kCATransactionDisableActions
 import platform.UIKit.UIView
 
 /**
@@ -48,29 +46,33 @@ actual fun CameraPreview(
     UIKitView(
         modifier = modifier,
         factory = {
-            val previewView = UIView()
-
-            // Create preview layer
-            val previewLayer = AVCaptureVideoPreviewLayer(session = controller.captureSession)
-            previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill
-
-            // Add layer to view
-            previewView.layer.addSublayer(previewLayer)
-
-            previewView
-        },
-        update = { view ->
-            // Update preview layer frame when view size changes
-            CATransaction.begin()
-            CATransaction.setValue(true, kCATransactionDisableActions)
-
-            val sublayers = view.layer.sublayers
-            if (sublayers != null && sublayers.isNotEmpty()) {
-                val layer = sublayers.first() as? CALayer
-                layer?.frame = view.bounds
-            }
-
-            CATransaction.commit()
+            val cameraView = CameraView(controller.captureSession)
+            cameraView
         }
     )
+}
+
+/**
+ * Custom UIView that handles layout updates for the preview layer
+ */
+@OptIn(ExperimentalForeignApi::class)
+private class CameraView(
+    private val captureSession: platform.AVFoundation.AVCaptureSession
+) : UIView(frame = kotlinx.cinterop.cValue { platform.CoreGraphics.CGRectZero }) {
+    
+    private val previewLayer = AVCaptureVideoPreviewLayer(session = captureSession).apply {
+        videoGravity = AVLayerVideoGravityResizeAspectFill
+    }
+
+    init {
+        layer.addSublayer(previewLayer)
+    }
+
+    override fun layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        previewLayer.frame = bounds
+        CATransaction.commit()
+    }
 }

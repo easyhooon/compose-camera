@@ -10,7 +10,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import platform.AVFoundation.*
 import platform.Foundation.*
-import platform.darwin.NSObject
+import platform.Photos.*
+import platform.UIKit.UIImage
+import platform.darwin.*
 import platform.posix.memcpy
 
 /**
@@ -111,8 +113,11 @@ internal class IOSCameraController(
 
         captureSession.commitConfiguration()
 
-        // Start session
-        captureSession.startRunning()
+        // Start session on background thread
+        val queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT.toLong(), 0.toULong())
+        dispatch_async(queue) {
+            captureSession.startRunning()
+        }
 
         // Update state
         _cameraState.value = CameraState.Ready(
@@ -326,12 +331,30 @@ private class PhotoCaptureDelegate(
         val width = cgImage?.let { platform.CoreGraphics.CGImageGetWidth(it).toInt() } ?: 0
         val height = cgImage?.let { platform.CoreGraphics.CGImageGetHeight(it).toInt() } ?: 0
 
-        onResult(ImageCaptureResult.Success(
-            byteArray = bytes,
-            width = width,
-            height = height,
-            rotation = 0
-        ))
+        // Save to Photo Library
+        // Save to Photo Library
+        PHPhotoLibrary.sharedPhotoLibrary().performChanges({
+             PHAssetChangeRequest.creationRequestForAssetFromImage(
+                 platform.UIKit.UIImage(data = data!!)
+             )
+        }, completionHandler = { success, error ->
+            if (success) {
+                // Return success with bytes (file path extraction is complex on iOS without identifier)
+                // Ideally we should return the PHAsset identifier but for now we return the bytes
+                // and let the MediaLoader fetch the latest asset
+                 onResult(ImageCaptureResult.Success(
+                    byteArray = bytes,
+                    width = width,
+                    height = height,
+                    rotation = 0
+                    // TODO: Pass localIdentifier if API supports it
+                ))
+            } else {
+                 onResult(ImageCaptureResult.Error(
+                    CameraException.CaptureFailed(Exception(error?.localizedDescription ?: "Save failed"))
+                ))
+            }
+        })
     }
 }
 
@@ -357,16 +380,38 @@ internal class IOSVideoRecording(
             _isRecording = false
             onStateChange(false)
 
-            val durationMs = (NSDate().timeIntervalSince1970 * 1000).toLong() - startTimeMs
-            val result = if (error != null) {
-                VideoRecordingResult.Error(CameraException.RecordingFailed(Exception(error)))
-            } else {
-                VideoRecordingResult.Success(
-                    uri = fileURL.absoluteString ?: "",
-                    durationMs = durationMs
+            if (error != null) {
+                recordingCompletion?.complete(
+                    VideoRecordingResult.Error(CameraException.RecordingFailed(Exception(error)))
                 )
+                return@VideoRecordingDelegate
             }
-            recordingCompletion?.complete(result)
+
+            // Save to Photo Library
+            PHPhotoLibrary.sharedPhotoLibrary().performChanges({
+                PHAssetChangeRequest.creationRequestForAssetFromVideoAtFileURL(fileURL)
+            }, completionHandler = { success, saveError ->
+                val durationMs = (NSDate().timeIntervalSince1970 * 1000).toLong() - startTimeMs
+                
+                if (success) {
+                    val result = VideoRecordingResult.Success(
+                        uri = fileURL.absoluteString ?: "", // Return temp URL or fetch asset URL
+                        durationMs = durationMs
+                    )
+                    recordingCompletion?.complete(result)
+                } else {
+                    val result = VideoRecordingResult.Error(
+                        CameraException.RecordingFailed(
+                            Exception(saveError?.localizedDescription ?: "Save failed")
+                        )
+                    )
+                    recordingCompletion?.complete(result)
+                }
+                
+                // Cleanup temp file
+                // NSFileManager.defaultManager.removeItemAtURL(fileURL, null) 
+                // Don't delete immediately if we return the temp URL
+            })
         }
         recordingDelegate = delegate
 
