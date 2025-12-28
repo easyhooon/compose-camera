@@ -1,19 +1,166 @@
-[![official project](http://jb.gg/badges/official.svg)](https://github.com/JetBrains#jetbrains-on-github)
+# Compose Camera
 
-# Multiplatform library template
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.3.0-blue.svg?style=flat&logo=kotlin)](https://kotlinlang.org)
+[![Compose Multiplatform](https://img.shields.io/badge/Compose%20Multiplatform-1.9.3-blueviolet.svg?style=flat)](https://www.jetbrains.com/lp/compose-multiplatform/)
 
-## What is it?
+A robust, feature-rich camera library for Compose Multiplatform supporting Android and iOS. Built with CameraX on Android and AVFoundation on iOS.
 
-This repository contains a simple library project, intended to demonstrate a [Kotlin Multiplatform](https://kotlinlang.org/docs/multiplatform.html) library that is deployable to [Maven Central](https://central.sonatype.com/).
+## Features
 
-The library has only one function: generate the [Fibonacci sequence](https://en.wikipedia.org/wiki/Fibonacci_sequence) starting from platform-provided numbers. Also, it has a test for each platform just to be sure that tests run.
+- 📱 **Cross-Platform**: Unified API for Android and iOS
+- 📸 **Camera Preview**: High-performance camera preview using native views
+- 🖼️ **Image Capture**: Capture high-quality photos with flash support
+- 🎥 **Video Recording**: Record videos with audio
+- 🔄 **Lens Control**: Switch between Front and Back cameras
+- 🔦 **Flash Control**: Torch, On, Off, Auto modes
+- ✋ **Permission Handling**: Built-in, platform-independent permission manager
+- 🧩 **Plugin Architecture**: Extensible design for frame processing and custom features
 
-Note that no other actions or tools usually required for the library development are set up, such as [tracking of backwards compatibility](https://kotlinlang.org/docs/jvm-api-guidelines-backward-compatibility.html#tools-designed-to-enforce-backward-compatibility), explicit API mode, licensing, contribution guideline, code of conduct and others. You can find a guide for best practices for designing Kotlin libraries [here](https://kotlinlang.org/docs/api-guidelines-introduction.html).
+| Platform | Status | Implementation |
+|----------|--------|----------------|
+| Android  | ✅ Ready | CameraX + CameraXViewfinder (Compose) |
+| iOS      | ✅ Ready | AVFoundation + UIKitView |
 
-## Guide
+## Installation
 
-Please find the detailed guide [here](https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-publish-libraries.html).
+> 🚀 **Note**: Maven Central publication is coming soon.
 
-# Other resources
-* [Publishing via the Central Portal](https://central.sonatype.org/publish-ea/publish-ea-guide/)
-* [Gradle Maven Publish Plugin \- Publishing to Maven Central](https://vanniktech.github.io/gradle-maven-publish-plugin/central/)
+Currently, this library can be used by including it locally in your project:
+
+```kotlin
+// settings.gradle.kts
+include(":library")
+```
+
+```kotlin
+// build.gradle.kts (commonMain)
+dependencies {
+    implementation(project(":library"))
+}
+```
+
+## Setup
+
+### Android (`AndroidManifest.xml`)
+
+Add necessary permissions:
+
+```xml
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-permission android:name="android.permission.RECORD_AUDIO" />
+<!-- For saving to gallery on older Android versions -->
+<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+```
+
+### iOS (`Info.plist`)
+
+Add usage descriptions and high-refresh rate support:
+
+```xml
+<key>NSCameraUsageDescription</key>
+<string>This app needs camera access to capture photos.</string>
+<key>NSMicrophoneUsageDescription</key>
+<string>This app needs microphone access to record videos.</string>
+
+<!-- Important for smooth preview on iPhone Pro models -->
+<key>CADisableMinimumFrameDurationOnPhone</key>
+<true/>
+```
+
+## Usage
+
+### 1. Permission Handling
+
+Use the platform-independent `rememberCameraPermissionManager` to handle permissions easily.
+
+```kotlin
+@Composable
+fun CameraScreen() {
+    val permissionManager = rememberCameraPermissionManager()
+    val scope = rememberCoroutineScope()
+    
+    LaunchedEffect(Unit) {
+        val result = permissionManager.requestCameraPermissions()
+        if (result.cameraGranted) {
+            // Permission granted
+        } else {
+            // Permission denied
+        }
+    }
+}
+```
+
+### 2. Camera Preview & Controls
+
+```kotlin
+@Composable
+fun MyCameraScreen() {
+    var cameraController by remember { mutableStateOf<CameraController?>(null) }
+    // Camera Configuration State
+    var config by remember { mutableStateOf(CameraConfiguration()) }
+    
+    Box(modifier = Modifier.fillMaxSize()) {
+        CameraPreview(
+            modifier = Modifier.fillMaxSize(),
+            configuration = config,
+            onCameraControllerReady = { controller ->
+                cameraController = controller
+            }
+        )
+        
+        // Example Controls
+        Button(onClick = { 
+            // Switch Lens
+            val newLens = if (config.lens == CameraLens.BACK) CameraLens.FRONT else CameraLens.BACK
+            config = config.copy(lens = newLens)
+            cameraController?.setLens(newLens)
+        }) {
+            Text("Switch Camera")
+        }
+        
+        Button(onClick = {
+            // Capture Photo
+            scope.launch {
+                val result = cameraController?.takePicture()
+                when(result) {
+                    is ImageCaptureResult.Success -> {
+                        println("Image saved: ${result.filePath}")
+                    }
+                    is ImageCaptureResult.Error -> {
+                         println("Error: ${result.exception}")
+                    }
+                }
+            }
+        }) {
+            Text("Capture")
+        }
+    }
+}
+```
+
+### 3. Video Recording
+
+```kotlin
+// Start Recording
+val recording = cameraController?.startRecording()
+
+// Stop Recording
+scope.launch {
+    val result = recording?.stop()
+    when(result) {
+        is VideoRecordingResult.Success -> {
+            println("Video saved to: ${result.uri}")
+        }
+        else -> { /* Handle error */ }
+    }
+}
+```
+
+
+
+## License
+
+```
+Apache License 2.0
+```
