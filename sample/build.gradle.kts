@@ -46,7 +46,8 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":library"))
+            implementation(project(":library:core"))
+            implementation(project(":library:compose"))
             implementation(compose.runtime)
             implementation(compose.foundation)
             implementation(compose.material3)
@@ -57,10 +58,10 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.kotlinx.coroutines.android)
             implementation(libs.androidx.lifecycle.runtime)
-            implementation("androidx.activity:activity-compose:1.9.3")
-            implementation("androidx.core:core-ktx:1.15.0")
-            implementation("io.coil-kt.coil3:coil-compose:3.0.4")
-            implementation("io.coil-kt.coil3:coil-video:3.3.0")
+            implementation(libs.androidx.activity.compose)
+            implementation(libs.androidx.core.ktx)
+            implementation(libs.coil.compose)
+            implementation(libs.coil.video)
         }
     }
 }
