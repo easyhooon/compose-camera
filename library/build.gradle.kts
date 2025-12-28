@@ -26,7 +26,7 @@ kotlin {
 
         compilations.configureEach {
             compilerOptions.configure {
-                jvmTarget.set(JvmTarget.JVM_11)
+                jvmTarget.set(JvmTarget.JVM_17)
             }
         }
     }
@@ -48,6 +48,7 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.kotlinx.coroutines.android)
             implementation(libs.androidx.lifecycle.runtime)
+            implementation(libs.androidx.activity.compose)
 
             // CameraX
             implementation(libs.camerax.core)
