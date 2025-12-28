@@ -89,7 +89,12 @@ data class CameraFrame(
     /**
      * Timestamp of the frame in nanoseconds
      */
-    val timestamp: Long
+    val timestamp: Long,
+
+    /**
+     * Platform-specific image object (ImageProxy on Android, CMSampleBuffer on iOS)
+     */
+    val nativeImage: Any? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

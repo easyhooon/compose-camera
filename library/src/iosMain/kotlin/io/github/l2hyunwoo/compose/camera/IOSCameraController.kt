@@ -56,6 +56,18 @@ internal class IOSCameraController(
         }
     }
 
+    private val videoDataOutputQueue = dispatch_queue_create("video_data_queue", null)
+    private var videoDataOutput: AVCaptureVideoDataOutput? = null
+    private val frameListeners = mutableListOf<(CMSampleBufferRef?) -> Unit>()
+
+    internal fun addFrameListener(listener: (CMSampleBufferRef?) -> Unit) {
+        frameListeners.add(listener)
+    }
+
+    internal fun removeFrameListener(listener: (CMSampleBufferRef?) -> Unit) {
+        frameListeners.remove(listener)
+    }
+
     private fun setupCamera() {
         captureSession.beginConfiguration()
 
@@ -94,6 +106,25 @@ internal class IOSCameraController(
                 if (captureSession.canAddOutput(photo)) {
                     captureSession.addOutput(photo)
                     photoOutput = photo
+                }
+
+                // Video Data Output (Frame Analysis)
+                val videoDataOutput = AVCaptureVideoDataOutput()
+                // Using 32BGRA is generally good for ML Kit / generic processing
+                val settings = mapOf<Any?, Any>(kCVPixelBufferPixelFormatTypeKey to kCVPixelFormatType_32BGRA)
+                videoDataOutput.videoSettings = settings
+                videoDataOutput.alwaysDiscardsLateVideoFrames = true
+
+                val delegate = VideoDataDelegate { buffer ->
+                    if (frameListeners.isNotEmpty()) {
+                        frameListeners.forEach { it(buffer) }
+                    }
+                }
+                videoDataOutput.setSampleBufferDelegate(delegate, videoDataOutputQueue)
+
+                if (captureSession.canAddOutput(videoDataOutput)) {
+                    captureSession.addOutput(videoDataOutput)
+                    this.videoDataOutput = videoDataOutput
                 }
 
                 // Add video output
@@ -395,7 +426,8 @@ internal class IOSVideoRecording(
                 
                 if (success) {
                     val result = VideoRecordingResult.Success(
-                        uri = fileURL.absoluteString ?: "", // Return temp URL or fetch asset URL
+                        // Return temp URL or fetch asset URL
+                        uri = fileURL.absoluteString ?: "",
                         durationMs = durationMs
                     )
                     recordingCompletion?.complete(result)
@@ -441,6 +473,23 @@ internal class IOSVideoRecording(
 
     override fun resume() {
         output.resumeRecording()
+    }
+}
+
+/**
+ * Delegate for video data output (frame analysis)
+ */
+@OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
+private class VideoDataDelegate(
+    private val onFrame: (CMSampleBufferRef?) -> Unit
+) : NSObject(), AVCaptureVideoDataOutputSampleBufferDelegateProtocol {
+    
+    override fun captureOutput(
+        output: AVCaptureOutput,
+        didOutputSampleBuffer: CMSampleBufferRef?,
+        fromConnection: AVCaptureConnection
+    ) {
+        onFrame(didOutputSampleBuffer)
     }
 }
 

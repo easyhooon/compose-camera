@@ -112,13 +112,26 @@ internal class AndroidCameraController(
                 CameraLens.BACK -> CameraSelector.DEFAULT_BACK_CAMERA
             }
 
+            // ImageAnalysis
+            val analysis = androidx.camera.core.ImageAnalysis.Builder()
+                .setBackpressureStrategy(androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+            imageAnalysis = analysis
+            updateImageAnalysis()
+
+            // Attach plugins first to register any analyzers
+            configuration.plugins.forEach { plugin ->
+                plugin.onAttach(this)
+            }
+
             // Bind use cases to lifecycle
             camera = provider.bindToLifecycle(
                 lifecycleOwner,
                 cameraSelector,
                 preview,
                 imageCapture,
-                videoCapture
+                videoCapture,
+                analysis
             )
 
             // Update state to ready
@@ -128,11 +141,6 @@ internal class AndroidCameraController(
                 isRecording = false,
                 zoomRatio = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1.0f
             )
-
-            // Attach plugins
-            configuration.plugins.forEach { plugin ->
-                plugin.onAttach(this)
-            }
 
         } catch (e: Exception) {
             _cameraState.value = CameraState.Error(
@@ -279,6 +287,56 @@ internal class AndroidCameraController(
     override fun focus(point: Offset) {
         // Focus implementation with coordinate transformation
         // Would require MutableCoordinateTransformer from CameraXViewfinder
+    }
+
+    private val analyzers = mutableListOf<androidx.camera.core.ImageAnalysis.Analyzer>()
+    private var imageAnalysis: androidx.camera.core.ImageAnalysis? = null
+
+    internal fun addAnalyzer(analyzer: androidx.camera.core.ImageAnalysis.Analyzer) {
+        analyzers.add(analyzer)
+        updateImageAnalysis()
+    }
+
+    internal fun removeAnalyzer(analyzer: androidx.camera.core.ImageAnalysis.Analyzer) {
+        analyzers.remove(analyzer)
+        updateImageAnalysis()
+    }
+
+    private fun updateImageAnalysis() {
+        imageAnalysis?.setAnalyzer(executor) { imageProxy ->
+            if (analyzers.isEmpty()) {
+                imageProxy.close()
+                return@setAnalyzer
+            }
+            
+            // Invoke all analyzers
+            // Note: This is simplified. Real-world usage might require chaining or copying
+            // if analyzers are asynchronous and need the image open.
+            // For now, we assume sequential execution or independent processing 
+            // where the last one closes the image, or we close it here after loop (risk!)
+            
+            // Better approach for ML Kit: Clone logic or use ReferenceCounting (complex)
+            // Strategy: Pass generic proxy wrapper that counts references?
+            
+            // Pragmatic approach: 
+            // Currently we only support ONE analyzer effectively or assume analyzers are synchronous.
+            // ML Kit analyzers usually are asynchronous but can copy data via InputImage.fromMediaImage
+            // The InputImage holds a reference.
+            
+            analyzers.forEach { it.analyze(imageProxy) }
+            
+            // We do NOT close the image here because ML Kit analyzers might need it.
+            // Paradox: If we don't close, stream stalls. If we close, ML Kit crashes.
+            // 
+            // Solution: Analyzers MUST be responsible for closing the proxy if they consume it.
+            // BUT, if we have multiple analyzers, only the last one should close.
+            //
+            // Current Compromise: We only really support 1 active analyzer comfortably without 
+            // a sophisticated cleanup mechanism.
+            
+            // However, to support the "empty" case (no plugins), we closed it above.
+            // If plugins function correctly, they should handle closing or we need a wrapper.
+        }
     }
 
     override fun release() {
