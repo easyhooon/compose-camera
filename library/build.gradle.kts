@@ -1,9 +1,12 @@
-import com.android.build.api.dsl.androidLibrary
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.android.kotlin.multiplatform.library)
+    alias(libs.plugins.compose.multiplatform)
+    alias(libs.plugins.compose.compiler)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.kmpNativeCoroutines)
     alias(libs.plugins.vanniktech.mavenPublish)
 }
 
@@ -27,14 +30,31 @@ kotlin {
             }
         }
     }
-    
+
     iosX64()
     iosArm64()
     iosSimulatorArm64()
 
     sourceSets {
         commonMain.dependencies {
-            // Compose Multiplatform dependencies will be added here
+            implementation(compose.runtime)
+            implementation(compose.foundation)
+            implementation(compose.ui)
+
+            implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kmp.nativecoroutines.annotations)
+        }
+
+        androidMain.dependencies {
+            implementation(libs.kotlinx.coroutines.android)
+            implementation(libs.androidx.lifecycle.runtime)
+
+            // CameraX
+            implementation(libs.camerax.core)
+            implementation(libs.camerax.camera2)
+            implementation(libs.camerax.lifecycle)
+            implementation(libs.camerax.video)
+            implementation(libs.camerax.compose)
         }
 
         commonTest.dependencies {
@@ -43,7 +63,7 @@ kotlin {
     }
 }
 
-// Maven publishing configuration - TODO: Set up later when tokens/accounts are ready
+// Maven publishing configuration
 mavenPublishing {
     publishToMavenCentral()
     signAllPublications()
