@@ -19,7 +19,14 @@ subprojects {
         kotlin {
             target("**/*.kt")
             targetExclude("**/build/**/*.kt")
-            ktlint().editorConfigOverride(mapOf("indent_size" to "2", "continuation_indent_size" to "2"))
+            ktlint().editorConfigOverride(mapOf(
+                "indent_size" to "2",
+                "continuation_indent_size" to "2",
+                "ktlint_standard_no-wildcard-imports" to "disabled",
+                "ktlint_function_naming_ignore_when_annotated_with" to "Composable",
+                "ktlint_standard_property-naming" to "disabled",
+                "ktlint_standard_function-naming" to "disabled"
+            ))
             licenseHeaderFile(rootProject.file("spotless/copyright.kt"))
             trimTrailingWhitespace()
             endWithNewline()

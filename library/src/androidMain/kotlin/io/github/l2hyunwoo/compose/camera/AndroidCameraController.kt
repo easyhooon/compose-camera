@@ -1,3 +1,18 @@
+/*
+ * Copyright (C) 2025 l2hyunwoo
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package io.github.l2hyunwoo.compose.camera
 
 import android.Manifest
@@ -9,12 +24,18 @@ import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.core.SurfaceRequest
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.lifecycle.awaitInstance
-import androidx.camera.video.*
+import androidx.camera.video.FallbackStrategy
+import androidx.camera.video.MediaStoreOutputOptions
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
+import androidx.camera.video.Recorder
+import androidx.camera.video.Recording
+import androidx.camera.video.VideoCapture
+import androidx.camera.video.VideoRecordEvent
 import androidx.compose.ui.geometry.Offset
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
@@ -32,373 +53,374 @@ import kotlin.coroutines.resume
  * Android implementation of [CameraController] using CameraX.
  */
 internal class AndroidCameraController(
-    private val context: Context,
-    private val lifecycleOwner: LifecycleOwner,
-    initialConfiguration: CameraConfiguration
+  private val context: Context,
+  private val lifecycleOwner: LifecycleOwner,
+  initialConfiguration: CameraConfiguration,
 ) : CameraController {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val executor = Executors.newSingleThreadExecutor()
+  private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+  private val executor = Executors.newSingleThreadExecutor()
 
-    private val _cameraState = MutableStateFlow<CameraState>(CameraState.Initializing)
-    override val cameraState: StateFlow<CameraState> = _cameraState.asStateFlow()
+  private val _cameraState = MutableStateFlow<CameraState>(CameraState.Initializing)
+  override val cameraState: StateFlow<CameraState> = _cameraState.asStateFlow()
 
-    private var _configuration = initialConfiguration
-    override val configuration: CameraConfiguration get() = _configuration
+  private var _configuration = initialConfiguration
+  override val configuration: CameraConfiguration get() = _configuration
 
-    // CameraX components
-    private var cameraProvider: ProcessCameraProvider? = null
-    private var camera: Camera? = null
-    private var preview: Preview? = null
-    private var imageCapture: ImageCapture? = null
-    private var videoCapture: VideoCapture<Recorder>? = null
-    private var activeRecording: Recording? = null
+  // CameraX components
+  private var cameraProvider: ProcessCameraProvider? = null
+  private var camera: Camera? = null
+  private var preview: Preview? = null
+  private var imageCapture: ImageCapture? = null
+  private var videoCapture: VideoCapture<Recorder>? = null
+  private var activeRecording: Recording? = null
 
-    // Surface request for Compose viewfinder
-    private val _surfaceRequest = MutableStateFlow<SurfaceRequest?>(null)
-    internal val surfaceRequest: StateFlow<SurfaceRequest?> = _surfaceRequest.asStateFlow()
+  // Surface request for Compose viewfinder
+  private val _surfaceRequest = MutableStateFlow<SurfaceRequest?>(null)
+  internal val surfaceRequest: StateFlow<SurfaceRequest?> = _surfaceRequest.asStateFlow()
 
-    /**
-     * Initialize the camera with the given configuration
-     */
-    internal suspend fun initialize() {
-        try {
-            cameraProvider = ProcessCameraProvider.awaitInstance(context)
-            bindCamera()
-        } catch (e: Exception) {
-            _cameraState.value = CameraState.Error(
-                CameraException.InitializationFailed(e)
+  /**
+   * Initialize the camera with the given configuration
+   */
+  internal suspend fun initialize() {
+    try {
+      cameraProvider = ProcessCameraProvider.awaitInstance(context)
+      bindCamera()
+    } catch (e: Exception) {
+      _cameraState.value = CameraState.Error(
+        CameraException.InitializationFailed(e),
+      )
+    }
+  }
+
+  private fun bindCamera() {
+    val provider = cameraProvider ?: return
+
+    try {
+      // Unbind all use cases before rebinding
+      provider.unbindAll()
+
+      // Build preview use case
+      preview = Preview.Builder().build().apply {
+        setSurfaceProvider { request ->
+          _surfaceRequest.value = request
+        }
+      }
+
+      // Build image capture use case
+      imageCapture = ImageCapture.Builder()
+        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+        .setFlashMode(configuration.flashMode.toCameraXFlashMode())
+        .build()
+
+      // Build video capture use case with fallback strategy
+      val qualitySelector = QualitySelector.fromOrderedList(
+        listOf(
+          configuration.videoQuality.toCameraXQuality(),
+          Quality.HD,
+          Quality.SD,
+        ),
+        FallbackStrategy.lowerQualityOrHigherThan(Quality.SD),
+      )
+      val recorder = Recorder.Builder()
+        .setQualitySelector(qualitySelector)
+        .build()
+      videoCapture = VideoCapture.withOutput(recorder)
+
+      // Select camera
+      val cameraSelector = when (configuration.lens) {
+        CameraLens.FRONT -> CameraSelector.DEFAULT_FRONT_CAMERA
+        CameraLens.BACK -> CameraSelector.DEFAULT_BACK_CAMERA
+      }
+
+      // ImageAnalysis
+      val analysis = androidx.camera.core.ImageAnalysis.Builder()
+        .setBackpressureStrategy(androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+        .build()
+      imageAnalysis = analysis
+      updateImageAnalysis()
+
+      // Attach plugins first to register any analyzers
+      configuration.plugins.forEach { plugin ->
+        plugin.onAttach(this)
+      }
+
+      // Bind use cases to lifecycle
+      camera = provider.bindToLifecycle(
+        lifecycleOwner,
+        cameraSelector,
+        preview,
+        imageCapture,
+        videoCapture,
+        analysis,
+      )
+
+      // Update state to ready
+      _cameraState.value = CameraState.Ready(
+        currentLens = configuration.lens,
+        flashMode = configuration.flashMode,
+        isRecording = false,
+        zoomRatio = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1.0f,
+      )
+    } catch (e: Exception) {
+      _cameraState.value = CameraState.Error(
+        CameraException.InitializationFailed(e),
+      )
+    }
+  }
+
+  override suspend fun takePicture(): ImageCaptureResult {
+    val capture = imageCapture ?: return ImageCaptureResult.Error(
+      CameraException.CaptureFailed(IllegalStateException("ImageCapture not initialized")),
+    )
+
+    val contentValues = ContentValues().apply {
+      put(MediaStore.MediaColumns.DISPLAY_NAME, "IMG_${System.currentTimeMillis()}.jpg")
+      put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+      put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/ComposeCamera")
+    }
+
+    val outputOptions = ImageCapture.OutputFileOptions.Builder(
+      context.contentResolver,
+      MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+      contentValues,
+    ).build()
+
+    return suspendCancellableCoroutine { continuation ->
+      capture.takePicture(
+        outputOptions,
+        executor,
+        object : ImageCapture.OnImageSavedCallback {
+          override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+            val uri = output.savedUri
+            // Get image info from the saved file
+            val result = ImageCaptureResult.Success(
+              // Image saved to file, not in memory
+              byteArray = ByteArray(0),
+              width = 0,
+              height = 0,
+              rotation = 0,
+              filePath = uri?.toString(),
             )
-        }
-    }
+            continuation.resume(result)
+          }
 
-    private fun bindCamera() {
-        val provider = cameraProvider ?: return
-
-        try {
-            // Unbind all use cases before rebinding
-            provider.unbindAll()
-
-            // Build preview use case
-            preview = Preview.Builder().build().apply {
-                setSurfaceProvider { request ->
-                    _surfaceRequest.value = request
-                }
-            }
-
-            // Build image capture use case
-            imageCapture = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                .setFlashMode(configuration.flashMode.toCameraXFlashMode())
-                .build()
-
-            // Build video capture use case with fallback strategy
-            val qualitySelector = QualitySelector.fromOrderedList(
-                listOf(
-                    configuration.videoQuality.toCameraXQuality(),
-                    Quality.HD,
-                    Quality.SD
-                ),
-                FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
+          override fun onError(exception: ImageCaptureException) {
+            continuation.resume(
+              ImageCaptureResult.Error(CameraException.CaptureFailed(exception)),
             )
-            val recorder = Recorder.Builder()
-                .setQualitySelector(qualitySelector)
-                .build()
-            videoCapture = VideoCapture.withOutput(recorder)
+          }
+        },
+      )
+    }
+  }
 
-            // Select camera
-            val cameraSelector = when (configuration.lens) {
-                CameraLens.FRONT -> CameraSelector.DEFAULT_FRONT_CAMERA
-                CameraLens.BACK -> CameraSelector.DEFAULT_BACK_CAMERA
-            }
+  override suspend fun startRecording(): VideoRecording {
+    val capture = videoCapture ?: throw CameraException.RecordingFailed(
+      IllegalStateException("VideoCapture not initialized"),
+    )
 
-            // ImageAnalysis
-            val analysis = androidx.camera.core.ImageAnalysis.Builder()
-                .setBackpressureStrategy(androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-            imageAnalysis = analysis
-            updateImageAnalysis()
-
-            // Attach plugins first to register any analyzers
-            configuration.plugins.forEach { plugin ->
-                plugin.onAttach(this)
-            }
-
-            // Bind use cases to lifecycle
-            camera = provider.bindToLifecycle(
-                lifecycleOwner,
-                cameraSelector,
-                preview,
-                imageCapture,
-                videoCapture,
-                analysis
-            )
-
-            // Update state to ready
-            _cameraState.value = CameraState.Ready(
-                currentLens = configuration.lens,
-                flashMode = configuration.flashMode,
-                isRecording = false,
-                zoomRatio = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1.0f
-            )
-
-        } catch (e: Exception) {
-            _cameraState.value = CameraState.Error(
-                CameraException.InitializationFailed(e)
-            )
-        }
+    // Create output options for MediaStore
+    val name = "VID_${System.currentTimeMillis()}.mp4"
+    val contentValues = ContentValues().apply {
+      put(MediaStore.Video.Media.DISPLAY_NAME, name)
+      put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+      put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/ComposeCamera")
     }
 
-    override suspend fun takePicture(): ImageCaptureResult {
-        val capture = imageCapture ?: return ImageCaptureResult.Error(
-            CameraException.CaptureFailed(IllegalStateException("ImageCapture not initialized"))
-        )
+    val outputOptions = MediaStoreOutputOptions.Builder(
+      context.contentResolver,
+      MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+    ).setContentValues(contentValues).build()
 
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, "IMG_${System.currentTimeMillis()}.jpg")
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/ComposeCamera")
-        }
+    // Prepare recording
+    val pendingRecording = capture.output.prepareRecording(context, outputOptions)
 
-        val outputOptions = ImageCapture.OutputFileOptions.Builder(
-            context.contentResolver,
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            contentValues
-        ).build()
-
-        return suspendCancellableCoroutine { continuation ->
-            capture.takePicture(
-                outputOptions,
-                executor,
-                object : ImageCapture.OnImageSavedCallback {
-                    override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                        val uri = output.savedUri
-                        // Get image info from the saved file
-                        val result = ImageCaptureResult.Success(
-                            byteArray = ByteArray(0), // Image saved to file, not in memory
-                            width = 0,
-                            height = 0,
-                            rotation = 0,
-                            filePath = uri?.toString()
-                        )
-                        continuation.resume(result)
-                    }
-
-                    override fun onError(exception: ImageCaptureException) {
-                        continuation.resume(
-                            ImageCaptureResult.Error(CameraException.CaptureFailed(exception))
-                        )
-                    }
-                }
-            )
-        }
+    // Enable audio if permission granted
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+      == PackageManager.PERMISSION_GRANTED
+    ) {
+      pendingRecording.withAudioEnabled()
     }
 
-    override suspend fun startRecording(): VideoRecording {
-        val capture = videoCapture ?: throw CameraException.RecordingFailed(
-            IllegalStateException("VideoCapture not initialized")
-        )
-
-        // Create output options for MediaStore
-        val name = "VID_${System.currentTimeMillis()}.mp4"
-        val contentValues = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, name)
-            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/ComposeCamera")
+    // Start recording
+    val recording = pendingRecording.start(ContextCompat.getMainExecutor(context)) { event ->
+      when (event) {
+        is VideoRecordEvent.Start -> {
+          val currentState = _cameraState.value
+          if (currentState is CameraState.Ready) {
+            _cameraState.value = currentState.copy(isRecording = true)
+          }
         }
-
-        val outputOptions = MediaStoreOutputOptions.Builder(
-            context.contentResolver,
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        ).setContentValues(contentValues).build()
-
-        // Prepare recording
-        val pendingRecording = capture.output.prepareRecording(context, outputOptions)
-
-        // Enable audio if permission granted
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) 
-            == PackageManager.PERMISSION_GRANTED) {
-            pendingRecording.withAudioEnabled()
+        is VideoRecordEvent.Finalize -> {
+          val currentState = _cameraState.value
+          if (currentState is CameraState.Ready) {
+            _cameraState.value = currentState.copy(isRecording = false)
+          }
         }
-
-        // Start recording
-        val recording = pendingRecording.start(ContextCompat.getMainExecutor(context)) { event ->
-            when (event) {
-                is VideoRecordEvent.Start -> {
-                    val currentState = _cameraState.value
-                    if (currentState is CameraState.Ready) {
-                        _cameraState.value = currentState.copy(isRecording = true)
-                    }
-                }
-                is VideoRecordEvent.Finalize -> {
-                    val currentState = _cameraState.value
-                    if (currentState is CameraState.Ready) {
-                        _cameraState.value = currentState.copy(isRecording = false)
-                    }
-                }
-            }
-        }
-
-        activeRecording = recording
-
-        return AndroidVideoRecording(
-            recording = recording,
-            outputUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI.toString() + "/" + name
-        )
+      }
     }
 
-    override fun updateConfiguration(config: CameraConfiguration) {
-        val needsRebind = config.lens != _configuration.lens
-        _configuration = config
+    activeRecording = recording
 
-        // Update flash mode without rebinding
-        imageCapture?.flashMode = config.flashMode.toCameraXFlashMode()
+    return AndroidVideoRecording(
+      recording = recording,
+      outputUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI.toString() + "/" + name,
+    )
+  }
 
-        if (needsRebind) {
-            bindCamera()
-        }
+  override fun updateConfiguration(config: CameraConfiguration) {
+    val needsRebind = config.lens != _configuration.lens
+    _configuration = config
+
+    // Update flash mode without rebinding
+    imageCapture?.flashMode = config.flashMode.toCameraXFlashMode()
+
+    if (needsRebind) {
+      bindCamera()
+    }
+  }
+
+  override fun setLens(lens: CameraLens) {
+    if (lens != configuration.lens) {
+      updateConfiguration(configuration.copy(lens = lens))
+    }
+  }
+
+  override fun setFlashMode(mode: FlashMode) {
+    _configuration = configuration.copy(flashMode = mode)
+    imageCapture?.flashMode = mode.toCameraXFlashMode()
+
+    val currentState = _cameraState.value
+    if (currentState is CameraState.Ready) {
+      _cameraState.value = currentState.copy(flashMode = mode)
+    }
+  }
+
+  override fun setZoom(ratio: Float) {
+    camera?.cameraControl?.setZoomRatio(ratio)
+
+    val currentState = _cameraState.value
+    if (currentState is CameraState.Ready) {
+      _cameraState.value = currentState.copy(zoomRatio = ratio)
+    }
+  }
+
+  override fun focus(point: Offset) {
+    // Focus implementation with coordinate transformation
+    // Would require MutableCoordinateTransformer from CameraXViewfinder
+  }
+
+  private val analyzers = mutableListOf<androidx.camera.core.ImageAnalysis.Analyzer>()
+  private var imageAnalysis: androidx.camera.core.ImageAnalysis? = null
+
+  internal fun addAnalyzer(analyzer: androidx.camera.core.ImageAnalysis.Analyzer) {
+    analyzers.add(analyzer)
+    updateImageAnalysis()
+  }
+
+  internal fun removeAnalyzer(analyzer: androidx.camera.core.ImageAnalysis.Analyzer) {
+    analyzers.remove(analyzer)
+    updateImageAnalysis()
+  }
+
+  private fun updateImageAnalysis() {
+    imageAnalysis?.setAnalyzer(executor) { imageProxy ->
+      if (analyzers.isEmpty()) {
+        imageProxy.close()
+        return@setAnalyzer
+      }
+
+      // Invoke all analyzers
+      // Note: This is simplified. Real-world usage might require chaining or copying
+      // if analyzers are asynchronous and need the image open.
+      // For now, we assume sequential execution or independent processing
+      // where the last one closes the image, or we close it here after loop (risk!)
+
+      // Better approach for ML Kit: Clone logic or use ReferenceCounting (complex)
+      // Strategy: Pass generic proxy wrapper that counts references?
+
+      // Pragmatic approach:
+      // Currently we only support ONE analyzer effectively or assume analyzers are synchronous.
+      // ML Kit analyzers usually are asynchronous but can copy data via InputImage.fromMediaImage
+      // The InputImage holds a reference.
+
+      analyzers.forEach { it.analyze(imageProxy) }
+
+      // We do NOT close the image here because ML Kit analyzers might need it.
+      // Paradox: If we don't close, stream stalls. If we close, ML Kit crashes.
+      //
+      // Solution: Analyzers MUST be responsible for closing the proxy if they consume it.
+      // BUT, if we have multiple analyzers, only the last one should close.
+      //
+      // Current Compromise: We only really support 1 active analyzer comfortably without
+      // a sophisticated cleanup mechanism.
+
+      // However, to support the "empty" case (no plugins), we closed it above.
+      // If plugins function correctly, they should handle closing or we need a wrapper.
+    }
+  }
+
+  override fun release() {
+    // Detach plugins
+    configuration.plugins.forEach { plugin ->
+      plugin.onDetach()
     }
 
-    override fun setLens(lens: CameraLens) {
-        if (lens != configuration.lens) {
-            updateConfiguration(configuration.copy(lens = lens))
-        }
-    }
-
-    override fun setFlashMode(mode: FlashMode) {
-        _configuration = configuration.copy(flashMode = mode)
-        imageCapture?.flashMode = mode.toCameraXFlashMode()
-
-        val currentState = _cameraState.value
-        if (currentState is CameraState.Ready) {
-            _cameraState.value = currentState.copy(flashMode = mode)
-        }
-    }
-
-    override fun setZoom(ratio: Float) {
-        camera?.cameraControl?.setZoomRatio(ratio)
-
-        val currentState = _cameraState.value
-        if (currentState is CameraState.Ready) {
-            _cameraState.value = currentState.copy(zoomRatio = ratio)
-        }
-    }
-
-    override fun focus(point: Offset) {
-        // Focus implementation with coordinate transformation
-        // Would require MutableCoordinateTransformer from CameraXViewfinder
-    }
-
-    private val analyzers = mutableListOf<androidx.camera.core.ImageAnalysis.Analyzer>()
-    private var imageAnalysis: androidx.camera.core.ImageAnalysis? = null
-
-    internal fun addAnalyzer(analyzer: androidx.camera.core.ImageAnalysis.Analyzer) {
-        analyzers.add(analyzer)
-        updateImageAnalysis()
-    }
-
-    internal fun removeAnalyzer(analyzer: androidx.camera.core.ImageAnalysis.Analyzer) {
-        analyzers.remove(analyzer)
-        updateImageAnalysis()
-    }
-
-    private fun updateImageAnalysis() {
-        imageAnalysis?.setAnalyzer(executor) { imageProxy ->
-            if (analyzers.isEmpty()) {
-                imageProxy.close()
-                return@setAnalyzer
-            }
-            
-            // Invoke all analyzers
-            // Note: This is simplified. Real-world usage might require chaining or copying
-            // if analyzers are asynchronous and need the image open.
-            // For now, we assume sequential execution or independent processing 
-            // where the last one closes the image, or we close it here after loop (risk!)
-            
-            // Better approach for ML Kit: Clone logic or use ReferenceCounting (complex)
-            // Strategy: Pass generic proxy wrapper that counts references?
-            
-            // Pragmatic approach: 
-            // Currently we only support ONE analyzer effectively or assume analyzers are synchronous.
-            // ML Kit analyzers usually are asynchronous but can copy data via InputImage.fromMediaImage
-            // The InputImage holds a reference.
-            
-            analyzers.forEach { it.analyze(imageProxy) }
-            
-            // We do NOT close the image here because ML Kit analyzers might need it.
-            // Paradox: If we don't close, stream stalls. If we close, ML Kit crashes.
-            // 
-            // Solution: Analyzers MUST be responsible for closing the proxy if they consume it.
-            // BUT, if we have multiple analyzers, only the last one should close.
-            //
-            // Current Compromise: We only really support 1 active analyzer comfortably without 
-            // a sophisticated cleanup mechanism.
-            
-            // However, to support the "empty" case (no plugins), we closed it above.
-            // If plugins function correctly, they should handle closing or we need a wrapper.
-        }
-    }
-
-    override fun release() {
-        // Detach plugins
-        configuration.plugins.forEach { plugin ->
-            plugin.onDetach()
-        }
-
-        activeRecording?.stop()
-        cameraProvider?.unbindAll()
-        executor.shutdown()
-    }
+    activeRecording?.stop()
+    cameraProvider?.unbindAll()
+    executor.shutdown()
+  }
 }
 
 /**
  * Android implementation of [VideoRecording]
  */
 internal class AndroidVideoRecording(
-    private val recording: Recording,
-    private val outputUri: String
+  private val recording: Recording,
+  private val outputUri: String,
 ) : VideoRecording {
 
-    private var _isRecording = true
-    override val isRecording: Boolean get() = _isRecording
+  private var _isRecording = true
+  override val isRecording: Boolean get() = _isRecording
 
-    private var startTimeMs = System.currentTimeMillis()
+  private var startTimeMs = System.currentTimeMillis()
 
-    override suspend fun stop(): VideoRecordingResult {
-        return suspendCancellableCoroutine { continuation ->
-            recording.stop()
-            _isRecording = false
-            
-            val durationMs = System.currentTimeMillis() - startTimeMs
-            continuation.resume(
-                VideoRecordingResult.Success(
-                    uri = outputUri,
-                    durationMs = durationMs
-                )
-            )
-        }
+  override suspend fun stop(): VideoRecordingResult {
+    return suspendCancellableCoroutine { continuation ->
+      recording.stop()
+      _isRecording = false
+
+      val durationMs = System.currentTimeMillis() - startTimeMs
+      continuation.resume(
+        VideoRecordingResult.Success(
+          uri = outputUri,
+          durationMs = durationMs,
+        ),
+      )
     }
+  }
 
-    override fun pause() {
-        recording.pause()
-    }
+  override fun pause() {
+    recording.pause()
+  }
 
-    override fun resume() {
-        recording.resume()
-    }
+  override fun resume() {
+    recording.resume()
+  }
 }
 
 // Extension functions for enum conversions
 private fun FlashMode.toCameraXFlashMode(): Int = when (this) {
-    FlashMode.OFF -> ImageCapture.FLASH_MODE_OFF
-    FlashMode.ON -> ImageCapture.FLASH_MODE_ON
-    FlashMode.AUTO -> ImageCapture.FLASH_MODE_AUTO
-    FlashMode.TORCH -> ImageCapture.FLASH_MODE_ON
+  FlashMode.OFF -> ImageCapture.FLASH_MODE_OFF
+  FlashMode.ON -> ImageCapture.FLASH_MODE_ON
+  FlashMode.AUTO -> ImageCapture.FLASH_MODE_AUTO
+  FlashMode.TORCH -> ImageCapture.FLASH_MODE_ON
 }
 
 private fun VideoQuality.toCameraXQuality(): Quality = when (this) {
-    VideoQuality.SD -> Quality.SD
-    VideoQuality.HD -> Quality.HD
-    VideoQuality.FHD -> Quality.FHD
-    VideoQuality.UHD -> Quality.UHD
+  VideoQuality.SD -> Quality.SD
+  VideoQuality.HD -> Quality.HD
+  VideoQuality.FHD -> Quality.FHD
+  VideoQuality.UHD -> Quality.UHD
 }

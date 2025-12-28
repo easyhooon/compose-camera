@@ -1,20 +1,35 @@
+/*
+ * Copyright (C) 2025 l2hyunwoo
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package io.github.l2hyunwoo.compose.camera.sample
 
 /**
  * Media item representing a captured photo or video.
  */
 data class MediaItem(
-    val uri: String,
-    val isVideo: Boolean,
-    val dateAdded: Long,
-    val displayName: String
+  val uri: String,
+  val isVideo: Boolean,
+  val dateAdded: Long,
+  val displayName: String,
 )
 
 /**
  * Platform-specific media loader for loading captured photos and videos.
  */
 expect class MediaLoader {
-    suspend fun loadMedia(): List<MediaItem>
+  suspend fun loadMedia(): List<MediaItem>
 }
 
 /**
@@ -28,6 +43,6 @@ expect fun rememberMediaLoader(): MediaLoader
  */
 @androidx.compose.runtime.Composable
 expect fun MediaThumbnailImage(
-    item: MediaItem,
-    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier
+  item: MediaItem,
+  modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
 )

@@ -1,3 +1,18 @@
+/*
+ * Copyright (C) 2025 l2hyunwoo
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package io.github.l2hyunwoo.compose.camera.sample
 
 import androidx.compose.foundation.background
@@ -23,117 +38,117 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun GalleryScreen(
-    onBack: () -> Unit,
-    onItemClick: (MediaItem) -> Unit,
-    modifier: Modifier = Modifier
+  onBack: () -> Unit,
+  onItemClick: (MediaItem) -> Unit,
+  modifier: Modifier = Modifier,
 ) {
-    val mediaLoader = rememberMediaLoader()
-    var mediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-    val scope = rememberCoroutineScope()
+  val mediaLoader = rememberMediaLoader()
+  var mediaItems by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+  var isLoading by remember { mutableStateOf(true) }
+  val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
-        isLoading = true
-        mediaItems = mediaLoader.loadMedia()
-        isLoading = false
-    }
+  LaunchedEffect(Unit) {
+    isLoading = true
+    mediaItems = mediaLoader.loadMedia()
+    isLoading = false
+  }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .statusBarsPadding()
+  Column(
+    modifier = modifier
+      .fillMaxSize()
+      .background(Color.Black)
+      .statusBarsPadding(),
+  ) {
+    // Top bar
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(16.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Top bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Button(
-                onClick = onBack,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White.copy(alpha = 0.2f)
-                )
-            ) {
-                Text("← 뒤로", color = Color.White)
-            }
+      Button(
+        onClick = onBack,
+        colors = ButtonDefaults.buttonColors(
+          containerColor = Color.White.copy(alpha = 0.2f),
+        ),
+      ) {
+        Text("← 뒤로", color = Color.White)
+      }
 
-            Text(
-                text = "갤러리 (${mediaItems.size})",
-                color = Color.White,
-                fontSize = 18.sp
-            )
+      Text(
+        text = "갤러리 (${mediaItems.size})",
+        color = Color.White,
+        fontSize = 18.sp,
+      )
 
-            // Refresh button
-            Button(
-                onClick = {
-                    scope.launch {
-                        isLoading = true
-                        mediaItems = mediaLoader.loadMedia()
-                        isLoading = false
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White.copy(alpha = 0.2f)
-                )
-            ) {
-                Text("🔄", color = Color.White)
-            }
-        }
-
-        if (isLoading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(color = Color.White)
-            }
-        } else if (mediaItems.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "촬영한 사진/영상이 없습니다",
-                    color = Color.Gray,
-                    textAlign = TextAlign.Center
-                )
-            }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                contentPadding = PaddingValues(4.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(mediaItems) { item ->
-                    MediaThumbnail(
-                        item = item,
-                        onClick = { onItemClick(item) }
-                    )
-                }
-            }
-        }
+      // Refresh button
+      Button(
+        onClick = {
+          scope.launch {
+            isLoading = true
+            mediaItems = mediaLoader.loadMedia()
+            isLoading = false
+          }
+        },
+        colors = ButtonDefaults.buttonColors(
+          containerColor = Color.White.copy(alpha = 0.2f),
+        ),
+      ) {
+        Text("🔄", color = Color.White)
+      }
     }
+
+    if (isLoading) {
+      Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+      ) {
+        CircularProgressIndicator(color = Color.White)
+      }
+    } else if (mediaItems.isEmpty()) {
+      Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+      ) {
+        Text(
+          text = "촬영한 사진/영상이 없습니다",
+          color = Color.Gray,
+          textAlign = TextAlign.Center,
+        )
+      }
+    } else {
+      LazyVerticalGrid(
+        columns = GridCells.Fixed(3),
+        contentPadding = PaddingValues(4.dp),
+        modifier = Modifier.fillMaxSize(),
+      ) {
+        items(mediaItems) { item ->
+          MediaThumbnail(
+            item = item,
+            onClick = { onItemClick(item) },
+          )
+        }
+      }
+    }
+  }
 }
 
 @Composable
 private fun MediaThumbnail(
-    item: MediaItem,
-    onClick: () -> Unit
+  item: MediaItem,
+  onClick: () -> Unit,
 ) {
-    Box(
-        modifier = Modifier
-            .aspectRatio(1f)
-            .padding(2.dp)
-            .clip(RoundedCornerShape(4.dp))
-            .clickable(onClick = onClick)
-    ) {
-        MediaThumbnailImage(
-            item = item,
-            modifier = Modifier.fillMaxSize()
-        )
-    }
+  Box(
+    modifier = Modifier
+      .aspectRatio(1f)
+      .padding(2.dp)
+      .clip(RoundedCornerShape(4.dp))
+      .clickable(onClick = onClick),
+  ) {
+    MediaThumbnailImage(
+      item = item,
+      modifier = Modifier.fillMaxSize(),
+    )
+  }
 }
