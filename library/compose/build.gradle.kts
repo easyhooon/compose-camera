@@ -34,14 +34,15 @@ kotlin {
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
 
-        withHostTestBuilder {}.configure {}
         withDeviceTestBuilder {
             sourceSetTreeName = "test"
         }
 
         compilations.configureEach {
-            compilerOptions.configure {
-                jvmTarget.set(JvmTarget.JVM_17)
+            compileTaskProvider.configure {
+                compilerOptions {
+                    jvmTarget.set(JvmTarget.JVM_17)
+                }
             }
         }
     }
@@ -65,6 +66,16 @@ kotlin {
 
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+            @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+            implementation(compose.uiTest)
+        }
+
+        androidInstrumentedTest.dependencies {
+            implementation(project.dependencies.platform(libs.compose.bom))
+            implementation("androidx.compose.ui:ui-test-junit4")
+            implementation("androidx.compose.ui:ui-test-manifest")
+            implementation(libs.androidx.test.runner)
+            implementation(libs.androidx.test.rules)
         }
     }
 }
